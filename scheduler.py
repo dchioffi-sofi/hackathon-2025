@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 # The channel ID for #test-sidesh. 
 # Get this by right-clicking the channel in Slack > View channel details > Copy channel ID
-GLEAN_CHANNEL_ID = "YOUR_TEST_SIDESH_CHANNEL_ID"
+SLACK_CHANNEL_ID = "C093W3B7F9T"
 
 class MeetingScheduler:
     def __init__(self, db, google_calendar_service, slack_client, config):
@@ -65,7 +65,7 @@ class MeetingScheduler:
                         attendee_text = ", ".join(attendee_emails)
                         message_text = f"@Glean Prep for meeting: '{meeting['summary']}' with attendees: {attendee_text}"
                         
-                        self.slack_client.chat_postMessage(channel=GLEAN_CHANNEL_ID, text=message_text)
+                        self.slack_client.chat_postMessage(channel=SLACK_CHANNEL_ID, text=message_text)
                         logger.info(f"Posted prep request to Glean channel for meeting '{meeting['summary']}'")
                         # --- End New Glean Logic ---
                         
