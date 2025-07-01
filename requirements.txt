@@ -1,0 +1,11 @@
+Flask
+slack_bolt
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2
+python-dotenv
+APScheduler
+psycopg2-binary
+PyJWT
+requests
+pytz

@@ -20,6 +20,7 @@ slack_app = App(
     token=Config.SLACK_BOT_TOKEN,
     signing_secret=Config.SLACK_SIGNING_SECRET,
 )
+# This handler is now used in the /slack/events route
 slack_handler = SlackRequestHandler(slack_app)
 
 db = Database(Config.DB_HOST, Config.DB_NAME, Config.DB_USER, Config.DB_PASSWORD)
@@ -32,7 +33,6 @@ google_calendar_client = GoogleCalendar(
     Config.GOOGLE_SCOPES
 )
 
-# The scheduler now gets the slack_client directly to post messages
 scheduler = MeetingScheduler(db, google_calendar_client, slack_app.client, Config)
 
 @slack_app.event("app_home_opened")
@@ -65,6 +65,15 @@ def handle_app_home_opened(event, say, client):
             ],
             text="Welcome! Please connect your Google Calendar."
         )
+
+# --- ADD THIS ROUTE ---
+@flask_app.route("/slack/events", methods=["POST"])
+def slack_events():
+    """
+    This route handles all incoming events from Slack.
+    """
+    return slack_handler.handle(request)
+# --------------------
 
 @flask_app.route("/google_oauth_callback", methods=["GET"])
 def google_oauth_callback():
