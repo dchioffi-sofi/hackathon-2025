@@ -20,7 +20,6 @@ slack_app = App(
     token=Config.SLACK_BOT_TOKEN,
     signing_secret=Config.SLACK_SIGNING_SECRET,
 )
-# This handler is now used in the /slack/events route
 slack_handler = SlackRequestHandler(slack_app)
 
 db = Database(Config.DB_HOST, Config.DB_NAME, Config.DB_USER, Config.DB_PASSWORD)
@@ -36,44 +35,52 @@ google_calendar_client = GoogleCalendar(
 scheduler = MeetingScheduler(db, google_calendar_client, slack_app.client, Config)
 
 @slack_app.event("app_home_opened")
-def handle_app_home_opened(event, say, client):
+def handle_app_home_opened(event, client):
+    """
+    This function now uses client.views_publish to update the App Home.
+    """
     user_id = event["user"]
     user_data = db.get_user(slack_user_id=user_id)
     
+    blocks = []
     if user_data and user_data.get('google_refresh_token'):
-        say(f"Welcome back! Your Google Calendar is connected.")
+        blocks.append({
+            "type": "section",
+            "text": { "type": "mrkdwn", "text": "Welcome back! Your Google Calendar is connected."}
+        })
     else:
         auth_url, state = google_calendar_client.get_auth_url(user_id)
-        say(
-            blocks=[
-                {
-                    "type": "section",
-                    "text": { "type": "mrkdwn", "text": f"👋 Hey there! To get started, I need access to your Google Calendar."}
-                },
-                {
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": { "type": "plain_text", "text": "Connect Google Calendar"},
-                            "style": "primary",
-                            "url": auth_url,
-                            "action_id": "connect_google_calendar"
-                        }
-                    ]
-                },
-            ],
-            text="Welcome! Please connect your Google Calendar."
-        )
+        blocks.extend([
+            {
+                "type": "section",
+                "text": { "type": "mrkdwn", "text": "👋 Hey there! To get started, I need access to your Google Calendar."}
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": { "type": "plain_text", "text": "Connect Google Calendar"},
+                        "style": "primary",
+                        "url": auth_url,
+                        "action_id": "connect_google_calendar"
+                    }
+                ]
+            },
+        ])
+    
+    client.views_publish(
+        user_id=user_id,
+        view={
+            "type": "home",
+            "blocks": blocks
+        }
+    )
 
-# --- ADD THIS ROUTE ---
+
 @flask_app.route("/slack/events", methods=["POST"])
 def slack_events():
-    """
-    This route handles all incoming events from Slack.
-    """
     return slack_handler.handle(request)
-# --------------------
 
 @flask_app.route("/google_oauth_callback", methods=["GET"])
 def google_oauth_callback():
