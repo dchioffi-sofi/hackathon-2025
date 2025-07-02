@@ -1,6 +1,9 @@
 import psycopg2
 from psycopg2 import sql
-import json
+import logging
+
+# Get the logger instance
+logger = logging.getLogger(__name__)
 
 class Database:
     """
@@ -46,6 +49,15 @@ class Database:
                     google_token_expiry TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            # ADD THIS NEW TABLE TO TRACK SENT REMINDERS
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS sent_notifications (
+                    slack_user_id VARCHAR(50) NOT NULL,
+                    event_id VARCHAR(255) NOT NULL,
+                    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (slack_user_id, event_id)
                 );
             """)
         print("Tables checked/created.")
@@ -107,6 +119,28 @@ class Database:
             users_data = cur.fetchall()
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, user_data)) for user_data in users_data]
+
+    def record_notification_sent(self, slack_user_id, event_id):
+        """Records that a notification for a specific event has been sent."""
+        if not self.conn: return False
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO sent_notifications (slack_user_id, event_id)
+                    VALUES (%s, %s)
+                    ON CONFLICT (slack_user_id, event_id) DO NOTHING;
+                """, (slack_user_id, event_id))
+            return True
+        except Exception as e:
+            logger.error(f"Error recording notification sent: {e}")
+            return False
+
+    def has_notification_been_sent(self, slack_user_id, event_id):
+        """Checks if a notification for a specific event has already been sent."""
+        if not self.conn: return True # Default to true to prevent duplicates on db error
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM sent_notifications WHERE slack_user_id = %s AND event_id = %s", (slack_user_id, event_id))
+            return cur.fetchone() is not None
 
     def close(self):
         """

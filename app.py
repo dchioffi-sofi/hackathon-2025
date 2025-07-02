@@ -36,6 +36,7 @@ google_calendar_client = GoogleCalendar(
 )
 
 scheduler = MeetingScheduler(db, google_calendar_client, slack_app.client, Config)
+scheduler.start()
 
 @slack_app.event("app_home_opened")
 def handle_app_home_opened(event, client, logger):

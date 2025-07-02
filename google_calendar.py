@@ -76,20 +76,20 @@ class GoogleCalendar:
         return build('calendar', 'v3', credentials=creds)
 
     def get_upcoming_meetings(self, service, hours_ahead=3):
-        # Always work with timezone-aware UTC datetimes for comparison
         now_utc = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
-        time_max_dt_utc = now_utc + datetime.timedelta(hours=hours_ahead) # Define the datetime object for comparison
+        
+        # We will now query for a larger window to avoid timezone issues
+        time_max_dt_utc = now_utc + datetime.timedelta(hours=12) 
 
-        # Format times as ISO strings for the API query
         time_min_query = now_utc.isoformat()
         time_max_query = time_max_dt_utc.isoformat()
 
-        logger.info(f"Querying Google Calendar from {time_min_query} to {time_max_query}")
+        logger.info(f"Querying Google Calendar in a 12-hour window from {time_min_query} to {time_max_query}")
 
         events_result = service.events().list(
             calendarId='primary',
             timeMin=time_min_query,
-            timeMax=time_max_query,
+            timeMax=time_max_query, # Using the larger 12-hour window for the query
             singleEvents=True,
             orderBy='startTime'
         ).execute()
@@ -103,38 +103,27 @@ class GoogleCalendar:
             event_status = event.get('status')
 
             if event_status == 'cancelled':
-                logger.info(f"Skipping cancelled event: {event_summary}")
                 continue
             
-            # This logic correctly parses timezone-aware datetimes
             event_start_dt_utc = None
             if 'dateTime' in event['start']:
                 try:
                     dt_obj = datetime.datetime.fromisoformat(event['start']['dateTime'])
                     event_start_dt_utc = dt_obj.astimezone(pytz.utc)
-                except ValueError as e:
-                    logger.error(f"Error parsing dateTime for event '{event_summary}': {e}. Skipping.")
+                except ValueError:
                     continue
             elif 'date' in event['start']:
                 try:
                     event_start_dt_utc = datetime.datetime.strptime(event['start']['date'], '%Y-%m-%d').replace(tzinfo=pytz.utc)
-                except ValueError as e:
-                    logger.error(f"Error parsing date for event '{event_summary}': {e}. Skipping.")
+                except ValueError:
                     continue
             
             if not event_start_dt_utc:
-                logger.warning(f"Could not determine valid UTC start time for event '{event_summary}'. Skipping.")
                 continue
 
-            # The logic to check if an event is in the past was already correct.
-            # The bug was the undefined 'time_max_utc' variable in the next check.
-            if event_start_dt_utc < now_utc:
-                logger.info(f"Skipping event '{event_summary}' because it is in the past. Start: {event_start_dt_utc.isoformat()}")
-                continue
-
-            # This check now uses the correctly defined time_max_dt_utc
-            if event_start_dt_utc > time_max_dt_utc:
-                logger.info(f"Skipping event '{event_summary}' because it is outside the reminder window. Start: {event_start_dt_utc.isoformat()}")
+            # This logic filters the results to only include meetings in the original 3-hour window
+            # This ensures we don't send reminders for meetings that are too far away.
+            if event_start_dt_utc < now_utc or event_start_dt_utc > (now_utc + datetime.timedelta(hours=hours_ahead)):
                 continue
 
             user_is_attendee = False
@@ -160,9 +149,6 @@ class GoogleCalendar:
                 })
         
         logger.info(f"Finished processing. Found {len(meetings)} valid meetings to return.")
-        return meetings
-            
-        logger.info(f"Finished processing events. Found {len(meetings)} meetings to return.")
         return meetings
 
 if __name__ == '__main__':
