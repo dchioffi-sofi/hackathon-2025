@@ -1,14 +1,16 @@
+import os
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 import datetime
 import pytz
+import logging
+import json
+from google_auth_oauthlib.flow import Flow
+
+logger = logging.getLogger(__name__)
 
 class GoogleCalendar:
-    """
-    Handles all interactions with the Google Calendar API.
-    """
     def __init__(self, client_id, client_secret, redirect_uri, scopes):
         self.client_id = client_id
         self.client_secret = client_secret
@@ -16,9 +18,6 @@ class GoogleCalendar:
         self.scopes = scopes
 
     def get_auth_url(self, slack_user_id):
-        """
-        Generates the Google OAuth URL for user authorization.
-        """
         flow = Flow.from_client_config(
             client_config={
                 "web": {
@@ -41,9 +40,6 @@ class GoogleCalendar:
         return authorization_url, state
 
     def exchange_code_for_tokens(self, authorization_response):
-        """
-        Exchanges the authorization code for access and refresh tokens.
-        """
         flow = Flow.from_client_config(
             client_config={
                 "web": {
@@ -62,9 +58,6 @@ class GoogleCalendar:
         return credentials.refresh_token, credentials.token_uri, credentials.client_id, credentials.client_secret, credentials.scopes, credentials.expiry, credentials.id_token
 
     def get_calendar_service(self, refresh_token, client_id, client_secret, token_uri, scopes):
-        """
-        Builds a Google Calendar service object using a refresh token.
-        """
         creds = Credentials(
             token=None,
             refresh_token=refresh_token,
@@ -76,48 +69,100 @@ class GoogleCalendar:
         if not creds.valid or creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
+                logger.info("Successfully refreshed Google token.")
             except Exception as e:
-                print(f"Error refreshing Google token: {e}")
+                logger.error(f"Error refreshing Google token: {e}")
                 return None
         return build('calendar', 'v3', credentials=creds)
 
     def get_upcoming_meetings(self, service, hours_ahead=3):
-        """
-        Fetches upcoming meetings from the user's primary calendar.
-        """
-        now = datetime.datetime.utcnow().isoformat() + 'Z'
-        time_max = (datetime.datetime.utcnow() + datetime.timedelta(hours=hours_ahead)).isoformat() + 'Z'
+        # Always work with timezone-aware UTC datetimes for comparison
+        now_utc = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
+        time_max_dt_utc = now_utc + datetime.timedelta(hours=hours_ahead) # Define the datetime object for comparison
+
+        # Format times as ISO strings for the API query
+        time_min_query = now_utc.isoformat()
+        time_max_query = time_max_dt_utc.isoformat()
+
+        logger.info(f"Querying Google Calendar from {time_min_query} to {time_max_query}")
 
         events_result = service.events().list(
             calendarId='primary',
-            timeMin=now,
-            timeMax=time_max,
+            timeMin=time_min_query,
+            timeMax=time_max_query,
             singleEvents=True,
             orderBy='startTime'
         ).execute()
         events = events_result.get('items', [])
 
+        logger.info(f"Received {len(events)} raw events from Google Calendar.")
+
         meetings = []
         for event in events:
-            if event.get('status') == 'cancelled':
+            event_summary = event.get('summary', 'No Summary')
+            event_status = event.get('status')
+
+            if event_status == 'cancelled':
+                logger.info(f"Skipping cancelled event: {event_summary}")
+                continue
+            
+            # This logic correctly parses timezone-aware datetimes
+            event_start_dt_utc = None
+            if 'dateTime' in event['start']:
+                try:
+                    dt_obj = datetime.datetime.fromisoformat(event['start']['dateTime'])
+                    event_start_dt_utc = dt_obj.astimezone(pytz.utc)
+                except ValueError as e:
+                    logger.error(f"Error parsing dateTime for event '{event_summary}': {e}. Skipping.")
+                    continue
+            elif 'date' in event['start']:
+                try:
+                    event_start_dt_utc = datetime.datetime.strptime(event['start']['date'], '%Y-%m-%d').replace(tzinfo=pytz.utc)
+                except ValueError as e:
+                    logger.error(f"Error parsing date for event '{event_summary}': {e}. Skipping.")
+                    continue
+            
+            if not event_start_dt_utc:
+                logger.warning(f"Could not determine valid UTC start time for event '{event_summary}'. Skipping.")
+                continue
+
+            # The logic to check if an event is in the past was already correct.
+            # The bug was the undefined 'time_max_utc' variable in the next check.
+            if event_start_dt_utc < now_utc:
+                logger.info(f"Skipping event '{event_summary}' because it is in the past. Start: {event_start_dt_utc.isoformat()}")
+                continue
+
+            # This check now uses the correctly defined time_max_dt_utc
+            if event_start_dt_utc > time_max_dt_utc:
+                logger.info(f"Skipping event '{event_summary}' because it is outside the reminder window. Start: {event_start_dt_utc.isoformat()}")
                 continue
 
             user_is_attendee = False
             attendees = event.get('attendees', [])
-            for attendee in attendees:
-                if attendee.get('self') and attendee.get('responseStatus') in ['accepted', 'tentative']:
-                    user_is_attendee = True
-                    break
+            is_creator_or_organizer = (event.get('creator', {}).get('self') or event.get('organizer', {}).get('self'))
+
+            if not attendees and is_creator_or_organizer:
+                user_is_attendee = True
+            elif attendees:
+                for attendee in attendees:
+                    if attendee.get('self') and attendee.get('responseStatus') in ['accepted', 'tentative', 'needsAction']:
+                        user_is_attendee = True
+                        break
             
-            if not attendees or user_is_attendee:
+            if user_is_attendee:
                  meetings.append({
                     'id': event['id'],
-                    'summary': event.get('summary', 'No Title'),
+                    'summary': event_summary,
                     'start': event['start'].get('dateTime', event['start'].get('date')),
                     'end': event['end'].get('dateTime', event['end'].get('date')),
                     'attendees': [{'email': a.get('email'), 'display_name': a.get('displayName')} for a in attendees if a.get('email')],
                     'html_link': event.get('htmlLink')
                 })
+        
+        logger.info(f"Finished processing. Found {len(meetings)} valid meetings to return.")
+        return meetings
+            
+        logger.info(f"Finished processing events. Found {len(meetings)} meetings to return.")
         return meetings
 
 if __name__ == '__main__':

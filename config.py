@@ -17,7 +17,8 @@ class Config:
     GOOGLE_SCOPES = [
         "https://www.googleapis.com/auth/calendar.readonly",
         "https://www.googleapis.com/auth/userinfo.email",
-        "https://www.googleapis.com/auth/userinfo.profile"
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "openid"
     ]
 
     GLEAN_API_KEY = os.environ.get("GLEAN_API_KEY")
@@ -29,4 +30,4 @@ class Config:
     DB_PASSWORD = os.environ.get("DB_PASSWORD")
 
     REMINDER_WINDOW_HOURS = 3
-    CALENDAR_CHECK_INTERVAL_MINUTES = 15
+    CALENDAR_CHECK_INTERVAL_MINUTES = 1 # Changed from 15 to 1
