@@ -18,6 +18,8 @@ class MeetingScheduler:
         self.config = config
         self.scheduler = BackgroundScheduler(timezone=pytz.utc)
         self.sent_reminders = set()
+        # Track Glean requests: {message_ts: user_id}
+        self.glean_requests = {}
 
     def start(self):
         self.scheduler.add_job(
@@ -65,8 +67,15 @@ class MeetingScheduler:
                         attendee_text = ", ".join(attendee_emails)
                         message_text = f"@Glean Prep for meeting: '{meeting['summary']}' with attendees: {attendee_text}"
                         
-                        self.slack_client.chat_postMessage(channel=SLACK_CHANNEL_ID, text=message_text)
-                        logger.info(f"Posted prep request to Glean channel for meeting '{meeting['summary']}'")
+                        # Post to Glean and capture the timestamp
+                        response = self.slack_client.chat_postMessage(channel=SLACK_CHANNEL_ID, text=message_text)
+                        
+                        if response.get('ok'):
+                            message_ts = response['ts']
+                            # Store which user this request is for
+                            self.glean_requests[message_ts] = slack_user_id
+                            logger.info(f"Posted prep request to Glean for {slack_user_id}, tracking ts: {message_ts}")
+                        
                         # --- End New Glean Logic ---
                         
                         self.sent_reminders.add((slack_user_id, meeting['id']))
@@ -77,3 +86,10 @@ class MeetingScheduler:
 
             except Exception as e:
                 logger.error(f"Error processing calendar for user {slack_user_id}: {e}", exc_info=True)
+
+    def get_user_for_glean_response(self, thread_ts):
+        """
+        Check if a thread timestamp corresponds to one of our Glean requests.
+        Returns the user_id to notify, or None if not our request.
+        """
+        return self.glean_requests.get(thread_ts)
